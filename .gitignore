@@ -1,3 +1,6 @@
 .env
+data/logs/*
 data/logs/*.log
 data/logs/*.log.*
+storage/cache/*
+storage/tmp/*
