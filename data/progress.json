@@ -1,0 +1,10 @@
+{
+  "is_executing": false,
+  "current_step": 0,
+  "total_steps": 0,
+  "from_color": null,
+  "to_color": null,
+  "path": [],
+  "started_at": null,
+  "estimated_completion": null
+}
