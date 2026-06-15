@@ -1,102 +1,23 @@
-# ============================================================================
-# Smart Lighting - Apache Configuration
-# ============================================================================
-# Enable mod_rewrite for clean URLs
-RewriteEngine On
+# Smart Lighting - Apache configuration
 
-# ============================================================================
-# SECURITY: Block access to sensitive files
-# ============================================================================
-# Block .env file (configuration)
-<FilesMatch "^\.env">
-    Order allow,deny
-    Deny from all
+<FilesMatch "^(?:\.env|\.htaccess)$">
+    Require all denied
 </FilesMatch>
 
-# Block .htaccess file itself
-<FilesMatch "^\.htaccess$">
-    Order allow,deny
-    Deny from all
-</FilesMatch>
+<IfModule mod_rewrite.c>
+    RewriteEngine On
 
-# Block access to config directory
-<DirectoryMatch "^/config">
-    Order allow,deny
-    Deny from all
-</DirectoryMatch>
+    # Protect application internals and environment files.
+    RewriteRule (^|/)\.(?:env|htaccess) - [F,L,NC]
+    RewriteRule ^(?:config|data)(?:/|$) - [F,L,NC]
+</IfModule>
 
-# Block access to data directory (JSON files)
-<DirectoryMatch "^/data">
-    Order allow,deny
-    Deny from all
-</DirectoryMatch>
+<IfModule mod_headers.c>
+    <FilesMatch "\.(?:css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$">
+        Header set Cache-Control "public, max-age=31536000"
+    </FilesMatch>
+</IfModule>
 
-# Block access to storage directory
-<DirectoryMatch "^/storage">
-    Order allow,deny
-    Deny from all
-</DirectoryMatch>
-
-# Block access to cron directory
-<DirectoryMatch "^/cron">
-    Order allow,deny
-    Deny from all
-</DirectoryMatch>
-
-# Block access to docs directory (optional)
-<DirectoryMatch "^/docs">
-    Order allow,deny
-    Deny from all
-</DirectoryMatch>
-
-# Block access to log files
-<FilesMatch "\.log$">
-    Order allow,deny
-    Deny from all
-</FilesMatch>
-
-# ============================================================================
-# ALLOW ACCESS TO PUBLIC ASSETS
-# ============================================================================
-# CSS, JavaScript, Images
-<FilesMatch "\.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$">
-    Header set Cache-Control "public, max-age=31536000"
-</FilesMatch>
-
-# ============================================================================
-# PREVENT DIRECTORY LISTING
-# ============================================================================
-Options -Indexes
-
-# ============================================================================
-# SET PROPER CONTENT TYPES
-# ============================================================================
-AddType application/json .json
-AddType text/javascript .js
-AddType text/css .css
-
-# ============================================================================
-# COMPRESSION
-# ============================================================================
 <IfModule mod_deflate.c>
     AddOutputFilterByType DEFLATE text/html text/plain text/xml text/css text/javascript application/javascript application/json
 </IfModule>
-
-# ============================================================================
-# SET DEFAULT FILE
-# ============================================================================
-DirectoryIndex index.php
-
-# ============================================================================
-# PREVENT HOTLINKING
-# ============================================================================
-<FilesMatch "\.(jpg|jpeg|png|gif|ico)$">
-    SetEnvIf Request_URI "^/assets/image/" allow_image
-    SetEnvIf Referer "^https?://" from_site
-    SetEnvIf Referer "^$" from_direct
-    Order Deny,Allow
-    Deny from all
-    Allow from env=allow_image
-    Allow from env=from_site
-    Allow from env=from_direct
-</FilesMatch>

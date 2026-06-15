@@ -5,5 +5,5 @@
  * ============================================================================
  */
 
-header('Location: /public/index.html');
+header('Location: public/index.html');
 exit;

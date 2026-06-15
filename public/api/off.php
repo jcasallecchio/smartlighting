@@ -8,7 +8,7 @@
  * Turns off the luminaire immediately, stopping any ongoing color transition.
  */
 
-require_once dirname(dirname(__FILE__)) . '/config/bootstrap.php';
+require_once dirname(dirname(dirname(__FILE__))) . '/config/bootstrap.php';
 
 header('Content-Type: application/json');
 
@@ -26,26 +26,12 @@ try {
     
     $ha = new HomeAssistantClient(getenv('HA_URL'), getenv('HA_TOKEN'), $logger);
     $entityId = getenv('ENTITY_ID');
+
+    $logger->log('INFO', 'Turn-off command received', ['entity_id' => $entityId], 'Device');
     
-    // Turn off device
-    $success = $ha->turnOff($entityId);
+    $ha->turnOff($entityId);
     
-    if (!$success) {
-        throw new Exception('Failed to turn off device');
-    }
-    
-    // Update state
-    $state = loadJson(DATA_PATH . '/state.json', ['state' => 'off']);
-    $state['state'] = 'off';
-    $state['last_updated'] = date('Y-m-d H:i:s');
-    saveJson(DATA_PATH . '/state.json', $state);
-    
-    // Cancel any ongoing transition
-    $progress = loadJson(DATA_PATH . '/progress.json', ['is_executing' => false]);
-    $progress['is_executing'] = false;
-    saveJson(DATA_PATH . '/progress.json', $progress);
-    
-    $logger->log('INFO', 'Device turned off', [], 'API');
+    $logger->log('SUCCESS', 'Device turned off', ['entity_id' => $entityId], 'Device');
     
     echo json_encode([
         'success' => true,
@@ -57,7 +43,7 @@ try {
     ], JSON_UNESCAPED_SLASHES);
     
 } catch (Exception $e) {
-    $logger->log('ERROR', 'Failed to turn off device: ' . $e->getMessage(), [], 'API');
+    $logger->log('ERROR', 'Failed to turn off device', ['error' => $e->getMessage()], 'Device');
     http_response_code(500);
     echo json_encode([
         'success' => false,

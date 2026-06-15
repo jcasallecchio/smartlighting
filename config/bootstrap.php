@@ -9,10 +9,7 @@
 
 define('APP_ROOT', dirname(dirname(__FILE__)));
 define('CONFIG_PATH', APP_ROOT . '/config');
-define('DATA_PATH', APP_ROOT . '/data');
-define('LOGS_PATH', DATA_PATH . '/logs');
-define('CACHE_PATH', APP_ROOT . '/storage/cache');
-define('TMP_PATH', APP_ROOT . '/storage/tmp');
+define('LOGS_PATH', APP_ROOT . '/data/logs');
 
 // ============================================================================
 // Load environment variables from .env file
@@ -44,17 +41,16 @@ function loadEnv() {
                 $value = substr($value, 1, -1);
             }
             
-            // Set as environment variable and constant
+            // Set as environment variable.
             putenv("{$key}={$value}");
-            if (!defined($key)) {
-                define($key, $value);
-            }
         }
     }
 }
 
 // Load environment variables
 loadEnv();
+
+date_default_timezone_set(getenv('APP_TIMEZONE') ?: 'America/Sao_Paulo');
 
 // ============================================================================
 // Validate required environment variables
@@ -69,7 +65,7 @@ foreach ($requiredEnv as $env) {
 // ============================================================================
 // Create necessary directories
 // ============================================================================
-$directories = [DATA_PATH, LOGS_PATH, CACHE_PATH, TMP_PATH];
+$directories = [LOGS_PATH];
 foreach ($directories as $dir) {
     if (!is_dir($dir)) {
         if (!mkdir($dir, 0755, true)) {
@@ -82,7 +78,50 @@ foreach ($directories as $dir) {
 // Initialize Logger
 // ============================================================================
 require_once CONFIG_PATH . '/logger.php';
-$logger = new Logger(LOGS_PATH, getenv('DEBUG_MODE') === 'true');
+$logger = new Logger(
+    LOGS_PATH,
+    getenv('DEBUG_MODE') === 'true',
+    getenv('LOG_LEVEL') ?: 'INFO',
+    getenv('LOG_MAX_SIZE') ?: 10485760
+);
+
+$requestStartedAt = microtime(true);
+$requestId = bin2hex(random_bytes(6));
+$logger->setRequestId($requestId);
+
+if (PHP_SAPI !== 'cli') {
+    $requestMethod = $_SERVER['REQUEST_METHOD'] ?? 'UNKNOWN';
+    $requestPath = parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH);
+    $isReadRequest = $requestMethod === 'GET' && http_response_code() < 400;
+    $isLogPolling = substr($requestPath, -13) === '/api/logs.php';
+
+    if (!$isLogPolling) {
+        $logger->log($isReadRequest ? 'DEBUG' : 'INFO', 'HTTP request started', [
+            'method' => $requestMethod,
+            'path' => $requestPath,
+            'client_ip' => $_SERVER['REMOTE_ADDR'] ?? null,
+            'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? null
+        ], 'HTTP');
+    }
+
+    register_shutdown_function(function() use ($logger, $requestStartedAt, $requestId, $requestMethod, $requestPath, $isReadRequest, $isLogPolling) {
+        if ($isLogPolling) {
+            return;
+        }
+
+        $status = http_response_code();
+        $durationMs = round((microtime(true) - $requestStartedAt) * 1000, 2);
+        $level = $status >= 500 ? 'ERROR' : ($status >= 400 ? 'WARNING' : ($isReadRequest ? 'DEBUG' : 'SUCCESS'));
+        $logger->log($level, 'HTTP request completed', [
+            'method' => $requestMethod,
+            'path' => $requestPath,
+            'status' => $status,
+            'duration_ms' => $durationMs,
+            'memory_peak_bytes' => memory_get_peak_usage(true),
+            'request_id' => $requestId
+        ], 'HTTP');
+    });
+}
 
 // ============================================================================
 // Set Global Error Handler
@@ -153,21 +192,5 @@ register_shutdown_function(function() {
 // ============================================================================
 // Load Helper Functions and Classes
 // ============================================================================
-require_once CONFIG_PATH . '/helpers.php';
 require_once CONFIG_PATH . '/hass.php';
 require_once CONFIG_PATH . '/colors.php';
-require_once CONFIG_PATH . '/scheduler.php';
-
-// ============================================================================
-// Log application startup
-// ============================================================================
-$logger->log('INFO', 'Smart Lighting application initialized', [
-    'entity_id' => getenv('ENTITY_ID'),
-    'ha_url' => getenv('HA_URL'),
-    'debug_mode' => getenv('DEBUG_MODE')
-], 'Bootstrap');
-
-return [
-    'logger' => $logger,
-    'app_root' => APP_ROOT
-];

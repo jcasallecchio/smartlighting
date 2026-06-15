@@ -1,214 +1,181 @@
 <?php
-/**
- * ============================================================================
- * LOGGER - Centralized Logging System for Smart Lighting
- * ============================================================================
- * Handles all application logging with support for different severity levels,
- * categories, and daily log rotation.
- *
- * Log Levels:
- * - INFO: General informational messages
- * - SUCCESS: Successful operations
- * - WARNING: Warning conditions
- * - ERROR: Error conditions
- */
 
 class Logger {
-    /**
-     * @var string Path to logs directory
-     */
-    private $logDir;
-    
-    /**
-     * @var bool Enable debug mode (verbose logging)
-     */
+    private $logPath;
     private $debugMode;
-    
-    /**
-     * @var array Log levels and their priorities
-     */
-    private $levels = [
-        'INFO' => 0,
-        'SUCCESS' => 1,
-        'WARNING' => 2,
-        'ERROR' => 3
+    private $maxFileSize;
+    private $minimumLevel;
+    private $requestId;
+
+    private const LEVELS = [
+        'DEBUG' => 10,
+        'INFO' => 20,
+        'SUCCESS' => 25,
+        'WARNING' => 30,
+        'ERROR' => 40,
+        'CRITICAL' => 50
     ];
-    
-    /**
-     * Constructor
-     * 
-     * @param string $logDir Path to logs directory
-     * @param bool $debugMode Enable debug mode
-     */
-    public function __construct($logDir, $debugMode = false) {
-        $this->logDir = rtrim($logDir, '/');
+
+    public function __construct($logPath, $debugMode = false, $minimumLevel = 'INFO', $maxFileSize = 10485760) {
+        $this->logPath = rtrim($logPath, '/\\');
         $this->debugMode = $debugMode;
+        $this->minimumLevel = strtoupper($minimumLevel ?: 'INFO');
+        $this->maxFileSize = max(1024, (int) $maxFileSize);
+        $this->requestId = null;
+
+        if (!is_dir($this->logPath)) {
+            mkdir($this->logPath, 0775, true);
+        }
     }
-    
-    /**
-     * Log a message
-     * 
-     * @param string $level Log level (INFO, SUCCESS, WARNING, ERROR)
-     * @param string $message Log message
-     * @param array $context Additional context data
-     * @param string $category Log category (default: 'General')
-     * @return bool True on success
-     */
-    public function log($level, $message, $context = [], $category = 'General') {
-        // Validate level
-        if (!isset($this->levels[$level])) {
-            $level = 'INFO';
-        }
-        
-        // Format log entry
-        $timestamp = date('Y-m-d H:i:s');
-        $logEntry = sprintf(
-            "[%s] [%s] [%s] [%s] %s",
-            $timestamp,
-            str_pad($level, 7),
-            str_pad($category, 15),
-            $_SERVER['REQUEST_METHOD'] ?? 'CLI',
-            $message
-        );
-        
-        // Add context if provided
-        if (!empty($context)) {
-            $logEntry .= PHP_EOL . 'Context: ' . json_encode($context, JSON_UNESCAPED_SLASHES);
-        }
-        
-        // Add request information for web requests
-        if (isset($_SERVER['REQUEST_URI'])) {
-            $logEntry .= PHP_EOL . 'Request: ' . $_SERVER['REQUEST_METHOD'] . ' ' . $_SERVER['REQUEST_URI'];
-        }
-        
-        // Add newline
-        $logEntry .= PHP_EOL . str_repeat('-', 100) . PHP_EOL;
-        
-        // Write to daily log file
-        $logFile = $this->getLogFile();
-        if (!@file_put_contents($logFile, $logEntry, FILE_APPEND)) {
-            // Fallback: try to create directory
-            if (!is_dir($this->logDir)) {
-                mkdir($this->logDir, 0755, true);
-                file_put_contents($logFile, $logEntry, FILE_APPEND);
-            }
-        }
-        
-        // Also log to PHP error log in debug mode
-        if ($this->debugMode) {
-            error_log($logEntry);
-        }
-        
-        return true;
+
+    public function setRequestId($requestId) {
+        $this->requestId = $requestId;
     }
-    
-    /**
-     * Get path to today's log file
-     * 
-     * @return string Path to log file
-     */
-    private function getLogFile() {
-        $date = date('Y-m-d');
-        return $this->logDir . '/smartlighting-' . $date . '.log';
-    }
-    
-    /**
-     * Get all log files
-     * 
-     * @return array Array of log file paths
-     */
-    public function getLogFiles() {
-        $files = [];
-        if (is_dir($this->logDir)) {
-            $items = scandir($this->logDir, SCANDIR_SORT_DESCENDING);
-            foreach ($items as $item) {
-                if (strpos($item, 'smartlighting-') === 0 && strpos($item, '.log') !== false) {
-                    $files[] = $this->logDir . '/' . $item;
-                }
-            }
+
+    public function log($level, $message, $context = [], $category = 'APP') {
+        $level = strtoupper($level);
+        if (!$this->shouldLog($level)) {
+            return false;
         }
-        return $files;
+
+        $entry = [
+            'timestamp' => date('Y-m-d H:i:s'),
+            'level' => $level,
+            'category' => $category,
+            'message' => $message,
+            'context' => $this->sanitizeContext($context)
+        ];
+
+        if ($this->requestId) {
+            $entry['request_id'] = $this->requestId;
+        }
+
+        $line = json_encode($entry, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . PHP_EOL;
+        $written = $this->writeLog($this->logPath . '/app.log', $line);
+
+        if ($this->debugMode && PHP_SAPI === 'cli') {
+            echo $line;
+        }
+
+        return $written;
     }
-    
-    /**
-     * Read logs from file with optional filtering
-     * 
-     * @param string|null $date Filter by date (YYYY-MM-DD)
-     * @param string|null $level Filter by level
-     * @param string|null $category Filter by category
-     * @param string|null $search Search in message
-     * @param int $limit Maximum entries to return
-     * @param int $offset Pagination offset
-     * @return array Array of log entries
-     */
-    public function readLogs($date = null, $level = null, $category = null, $search = null, $limit = 100, $offset = 0) {
-        $logFile = $date 
-            ? $this->logDir . '/smartlighting-' . $date . '.log'
-            : $this->getLogFile();
-        
+
+    public function query($filters = [], $limit = 200, $offset = 0) {
+        $logFile = $this->logPath . '/app.log';
+        $result = [
+            'entries' => [],
+            'total' => 0,
+            'levels' => [],
+            'categories' => []
+        ];
+
         if (!file_exists($logFile)) {
-            return [];
+            return $result;
         }
-        
-        $content = file_get_contents($logFile);
-        $entries = explode(str_repeat('-', 100) . PHP_EOL, $content);
-        
-        $filtered = [];
-        foreach ($entries as $entry) {
-            if (empty(trim($entry))) {
-                continue;
-            }
-            
-            // Parse entry
-            if (!preg_match('/\[(.+?)\] \[(.+?)\] \[(.+?)\] \[(.+?)\] (.+)/s', $entry, $matches)) {
-                continue;
-            }
-            
-            $entryData = [
-                'timestamp' => trim($matches[1]),
-                'level' => trim($matches[2]),
-                'category' => trim($matches[3]),
-                'method' => trim($matches[4]),
-                'message' => trim($matches[5])
-            ];
-            
-            // Apply filters
-            if ($level && $entryData['level'] !== $level) {
-                continue;
-            }
-            if ($category && $entryData['category'] !== $category) {
-                continue;
-            }
-            if ($search && stripos($entry, $search) === false) {
-                continue;
-            }
-            
-            $filtered[] = $entryData;
+
+        $lines = file($logFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        if ($lines === false) {
+            return $result;
         }
-        
-        // Apply pagination
-        return array_slice($filtered, $offset, $limit);
+
+        $matches = [];
+        foreach ($lines as $line) {
+            $entry = $this->parseLine($line);
+            if (!$entry || !$this->matchesFilters($entry, $filters)) {
+                continue;
+            }
+
+            $matches[] = $entry;
+            $result['levels'][$entry['level']] = ($result['levels'][$entry['level']] ?? 0) + 1;
+            $result['categories'][$entry['category']] = ($result['categories'][$entry['category']] ?? 0) + 1;
+        }
+
+        $matches = array_reverse($matches);
+        $result['total'] = count($matches);
+        $result['entries'] = array_slice($matches, max(0, $offset), max(1, $limit));
+        ksort($result['levels']);
+        ksort($result['categories']);
+
+        return $result;
     }
-    
-    /**
-     * Clean old log files
-     * 
-     * @param int $days Delete logs older than this many days
-     * @return int Number of files deleted
-     */
-    public function cleanOldLogs($days = 30) {
-        $deleted = 0;
-        $cutoffTime = time() - ($days * 86400);
-        
-        $files = $this->getLogFiles();
-        foreach ($files as $file) {
-            if (filemtime($file) < $cutoffTime) {
-                if (unlink($file)) {
-                    $deleted++;
-                }
+
+    private function shouldLog($level) {
+        $current = self::LEVELS[$level] ?? self::LEVELS['INFO'];
+        $minimum = self::LEVELS[$this->minimumLevel] ?? self::LEVELS['INFO'];
+        return $current >= $minimum;
+    }
+
+    private function sanitizeContext($value, $key = '') {
+        $sensitiveKeys = ['token', 'authorization', 'password', 'secret', 'api_key', 'apikey'];
+        $normalizedKey = strtolower((string) $key);
+
+        foreach ($sensitiveKeys as $sensitiveKey) {
+            if (strpos($normalizedKey, $sensitiveKey) !== false) {
+                return '[REDACTED]';
             }
         }
-        
-        return $deleted;
+
+        if (is_array($value)) {
+            $clean = [];
+            foreach ($value as $childKey => $childValue) {
+                $clean[$childKey] = $this->sanitizeContext($childValue, $childKey);
+            }
+            return $clean;
+        }
+
+        if (is_object($value)) {
+            return $this->sanitizeContext((array) $value, $key);
+        }
+
+        if (is_string($value) && strlen($value) > 2000) {
+            return substr($value, 0, 2000) . '...[truncated]';
+        }
+
+        return $value;
+    }
+
+    private function writeLog($filepath, $content) {
+        if (file_exists($filepath) && filesize($filepath) >= $this->maxFileSize) {
+            $this->rotateLog($filepath);
+        }
+
+        return @file_put_contents($filepath, $content, FILE_APPEND | LOCK_EX) !== false;
+    }
+
+    private function rotateLog($filepath) {
+        $rotatedFile = $filepath . '.' . date('Y-m-d_H-i-s');
+        @rename($filepath, $rotatedFile);
+    }
+
+    private function parseLine($line) {
+        $decoded = json_decode($line, true);
+        if (is_array($decoded) && isset($decoded['timestamp'], $decoded['level'], $decoded['category'], $decoded['message'])) {
+            $decoded['context'] = $decoded['context'] ?? [];
+            return $decoded;
+        }
+
+        return null;
+    }
+
+    private function matchesFilters($entry, $filters) {
+        if (!empty($filters['date']) && strpos($entry['timestamp'], $filters['date']) !== 0) {
+            return false;
+        }
+        if (!empty($filters['level']) && strtoupper($filters['level']) !== $entry['level']) {
+            return false;
+        }
+        if (!empty($filters['category']) && strcasecmp($filters['category'], $entry['category']) !== 0) {
+            return false;
+        }
+        if (!empty($filters['request_id']) && ($entry['request_id'] ?? '') !== $filters['request_id']) {
+            return false;
+        }
+        if (!empty($filters['search'])) {
+            $haystack = $entry['message'] . ' ' . json_encode($entry['context'], JSON_UNESCAPED_UNICODE);
+            if (stripos($haystack, $filters['search']) === false) {
+                return false;
+            }
+        }
+        return true;
     }
 }

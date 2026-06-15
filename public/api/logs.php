@@ -1,63 +1,43 @@
 <?php
-/**
- * ============================================================================
- * API ENDPOINT - Get Logs
- * ============================================================================
- * GET /api/logs
- * 
- * Returns application logs with optional filtering.
- * 
- * Query parameters:
- * - date: Filter by date (YYYY-MM-DD)
- * - level: Filter by level (INFO, SUCCESS, WARNING, ERROR)
- * - category: Filter by category
- * - search: Search in message
- * - limit: Maximum entries (default: 100, max: 1000)
- * - offset: Pagination offset (default: 0)
- */
 
-require_once dirname(dirname(__FILE__)) . '/config/bootstrap.php';
+require_once dirname(dirname(dirname(__FILE__))) . '/config/bootstrap.php';
 
 header('Content-Type: application/json');
+header('Cache-Control: no-store');
 
 try {
-    // Get query parameters
-    $date = $_GET['date'] ?? null;
-    $level = $_GET['level'] ?? null;
-    $category = $_GET['category'] ?? null;
-    $search = $_GET['search'] ?? null;
-    $limit = min(intval($_GET['limit'] ?? 100), 1000);
-    $offset = intval($_GET['offset'] ?? 0);
-    
-    // Read logs
-    $logs = $logger->readLogs($date, $level, $category, $search, $limit, $offset);
-    
-    $response = [
+    $limit = min(max((int) ($_GET['limit'] ?? 250), 1), 1000);
+    $offset = max((int) ($_GET['offset'] ?? 0), 0);
+    $filters = [
+        'date' => trim($_GET['date'] ?? ''),
+        'level' => trim($_GET['level'] ?? ''),
+        'category' => trim($_GET['category'] ?? ''),
+        'search' => trim($_GET['search'] ?? ''),
+        'request_id' => trim($_GET['request_id'] ?? '')
+    ];
+
+    $result = $logger->query($filters, $limit, $offset);
+
+    echo json_encode([
         'success' => true,
         'message' => 'Logs retrieved',
         'data' => [
-            'logs' => $logs,
-            'total' => count($logs),
+            'logs' => $result['entries'],
+            'total' => $result['total'],
+            'levels' => $result['levels'],
+            'categories' => $result['categories'],
             'limit' => $limit,
             'offset' => $offset,
-            'filters' => [
-                'date' => $date,
-                'level' => $level,
-                'category' => $category,
-                'search' => $search
-            ]
+            'filters' => $filters
         ],
         'timestamp' => date('Y-m-d H:i:s')
-    ];
-    
-    echo json_encode($response, JSON_UNESCAPED_SLASHES);
-    
-} catch (Exception $e) {
-    $logger->log('ERROR', 'Failed to get logs: ' . $e->getMessage(), [], 'API');
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+} catch (Throwable $e) {
+    $logger->log('ERROR', 'Failed to retrieve logs', ['error' => $e->getMessage()], 'Logs');
     http_response_code(500);
     echo json_encode([
         'success' => false,
         'message' => 'Failed to retrieve logs',
         'timestamp' => date('Y-m-d H:i:s')
-    ], JSON_UNESCAPED_SLASHES);
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 }
